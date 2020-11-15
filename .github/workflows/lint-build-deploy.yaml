@@ -3,8 +3,7 @@ name: Lint, Build & Deploy
 on:
   push:
     branches:
-      - master
-  pull_request_target:
+      - sebastiaan/backend/test-ci-linting
 
 
 jobs:
@@ -88,11 +87,13 @@ jobs:
       # to add annotations to the Actions results. A normal `pull_request` trigger
       # does not get those permissions for security reasons.
       - name: Run flake8
-        uses: julianwachholz/flake8-action@v1
-        with:
-          checkName: lint
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: flake8
+#       - name: Run flake8
+#         uses: julianwachholz/flake8-action@v1
+#         with:
+#           checkName: lint
+#         env:
+#           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-and-deploy:
     name: Build and Deploy to Kubernetes
