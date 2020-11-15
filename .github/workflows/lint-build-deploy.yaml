@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - sebastiaan/backend/apply-proper-check-name
   pull_request_target:
 
 
@@ -90,7 +91,7 @@ jobs:
       - name: Run flake8
         uses: julianwachholz/flake8-action@v1
         with:
-          checkName: lint
+          checkName: Lint using pre-commit & flake8
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
