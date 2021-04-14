@@ -2,11 +2,14 @@ import asyncio
 import hashlib
 import logging
 import pathlib
+import random
 import re
 import signal
+import subprocess
+import sys
 import types
 import typing
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from io import BytesIO
 
@@ -14,7 +17,8 @@ import discord
 import matplotlib.pyplot as plt
 from discord.ext import commands
 
-from bot import constants
+if __name__ != "__main__":
+    from bot import constants
 
 # Import resource management utilities, but only on Unix
 LOAD_COG = True
@@ -63,7 +67,7 @@ class Latex(commands.Cog):
     """Renders latex."""
 
     @staticmethod
-    def _render(text: str, filepath: pathlib.Path) -> BytesIO:
+    def render(text: str, filepath: pathlib.Path) -> BytesIO:
         """
         Return the rendered image if latex compiles without errors, otherwise raise a BadArgument Exception.
 
@@ -95,10 +99,10 @@ class Latex(commands.Cog):
             return text
 
     @staticmethod
-    def _bound_render(
+    def bound_render(
         render: typing.Callable[[], BytesIO],
         cpu_limit: int = 5,
-        mem_limit: int = 10
+        mem_limit: int = 400  # TODO: Figure out why this has to be so high # noqa: Flake please
     ) -> typing.Union[BytesIO, str]:
         """
         Calls Latex._render with safe usage limits.
@@ -130,15 +134,14 @@ class Latex(commands.Cog):
 
         # Update the limits
         resource.setrlimit(resource.RLIMIT_CPU, (cpu_limit, current_cpu[1]))
-        resource.setrlimit(resource.RLIMIT_AS, (mem_limit, current_mem[1]))
+        resource.setrlimit(resource.RLIMIT_AS, (int(mem_limit), current_mem[1]))
 
-        # TODO: Figure out why the except blocks aren't called  # noqa: Why can't I have todos
         try:
             return render()
         except MemoryError:
-            return "Your input exceeded the allowed memory limit. Aborting."
+            return "Your input exceeded the allowed memory limit."
         except CPUError:
-            return "Your input exceeded the allowed CPU limit. Aborting."
+            return "Your input exceeded the allowed CPU limit."
 
     @commands.command()
     @commands.max_concurrency(1, commands.BucketType.guild, wait=True)
@@ -152,24 +155,30 @@ class Latex(commands.Cog):
                 await ctx.send(file=discord.File(image_path))
                 return
 
-            with ProcessPoolExecutor(1) as pool:
-                loop = asyncio.get_running_loop()
-                function = partial(self._render, text, image_path)
+            if USE_RESOURCE:
+                # Handle cases where the resource library is available
+                process = subprocess.Popen(["python", __file__, text, image_path], stdout=subprocess.PIPE)
+                while process.poll() is None:
+                    await asyncio.sleep(2)
 
-                if USE_RESOURCE:
-                    # Handle cases where the resource library is available
-                    result = await loop.run_in_executor(pool, Latex._bound_render, function)
+                if process.returncode != 0:
+                    # The helper did not exit successfully.
+                    embed = discord.Embed(
+                        title=random.choice(constants.ERROR_REPLIES),
+                        color=constants.Colours.soft_red,
+                        description=process.stdout.read().decode()
+                    )
 
-                    # The helper didn't return, and was caught by an error handler.
-                    if isinstance(result, str):
-                        await ctx.send(result)
-                        return
+                    await ctx.send(embed=embed)
+                    return
 
-                else:
-                    # Handle cases where the resource library is not available
-                    result = await loop.run_in_executor(pool, function)
+                await ctx.send(file=discord.File(image_path, "latex.png"))
 
-            await ctx.send(file=discord.File(result, "latex.png"))
+            else:
+                # Handle cases where the resource library is not available
+                with ThreadPoolExecutor() as pool:
+                    result = await asyncio.get_running_loop().run_in_executor(pool, Latex.render, text, image_path)
+                await ctx.send(file=discord.File(result, "latex.png"))
 
 
 def setup(bot: commands.Bot) -> None:
@@ -177,3 +186,26 @@ def setup(bot: commands.Bot) -> None:
     # Disable the cog if the resource library is not available, and the debug flag is not set.
     if LOAD_COG:
         bot.add_cog(Latex(bot))
+
+
+if __name__ == "__main__":
+    _text = sys.argv[1]
+    _image_path = pathlib.Path(sys.argv[2])
+    _function = partial(Latex.render, _text, _image_path)
+
+    try:
+        _result = Latex.bound_render(_function)
+
+        if isinstance(_result, str):
+            # If a resource limit was hit, let the parent process know
+            sys.stdout.write(_result)
+            exit(1)
+
+        # Normal exit
+        exit(0)
+
+    except Exception as e:
+        # Unhandled exception
+        # TODO: Parse this error better # noqa: Why
+        sys.stdout.write(e)
+        exit(2)
